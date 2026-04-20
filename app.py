@@ -3,17 +3,14 @@ from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 import cv2
 import numpy as np
 
-# Sayfa Genişliği
-st.set_page_config(page_title="MIL-SPEC High Def", layout="wide")
+st.set_page_config(page_title="Tactical Vision HD", layout="wide")
 
-class MilitaryVisionTransformer(VideoTransformerBase):
+class TacticalTransformer(VideoTransformerBase):
     def __init__(self):
         self.mode = "Normal"
-        # Maskeleri bir kez oluşturup önbelleğe alarak performansı artırıyoruz
         self.vignette_mask = None
 
     def create_vignette(self, rows, cols):
-        """Performans için maskeyi sadece çözünürlük değiştiğinde bir kez oluşturur."""
         kernel_x = cv2.getGaussianKernel(cols, cols/3)
         kernel_y = cv2.getGaussianKernel(rows, rows/3)
         kernel = kernel_y * kernel_x.T
@@ -24,59 +21,69 @@ class MilitaryVisionTransformer(VideoTransformerBase):
         img = frame.to_ndarray(format="bgr24")
         rows, cols = img.shape[:2]
 
-        # Çözünürlük değişirse veya ilk kez çalışıyorsa maskeyi güncelle
         if self.vignette_mask is None or self.vignette_mask.shape[:2] != (rows, cols):
             self.vignette_mask = self.create_vignette(rows, cols)
 
         if self.mode == "Gece Görüşü (Yeşil)":
-            # Hızlı Parlaklık Artırma
-            img = cv2.convertScaleAbs(img, alpha=1.4, beta=40)
-            # Yeşil Kanala Hızlı Dönüşüm
+            img = cv2.convertScaleAbs(img, alpha=1.5, beta=40)
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            # Yeşil fosfor efekti
             img = cv2.merge([np.zeros_like(gray), gray, np.zeros_like(gray)])
-            # Hızlı Vignette Uygulama
             img = (img * self.vignette_mask[:, :, np.newaxis]).astype(np.uint8)
 
-        elif self.mode == "Kızılötesi (Simüle)":
+        elif self.mode == "Termal (Gelişmiş)":
+            # 1. Görüntüyü griye çevir ve kontrastı artır
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            # Daha stabil bir termal efekt
+            # 2. Isı yayan kenarları belirginleştir (Edge Enhancement)
+            edges = cv2.Canny(gray, 50, 150)
+            edges = cv2.dilate(edges, None)
+            # 3. Ironbow Renk Paleti Uygula
+            thermal = cv2.applyColorMap(gray, cv2.COLORMAP_JET)
+            # 4. Kenarları bindir (Isı imzası netliği için)
+            img = cv2.addWeighted(thermal, 0.8, cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR), 0.2, 0)
+            img = (img * self.vignette_mask[:, :, np.newaxis]).astype(np.uint8)
+
+        elif self.mode == "Kızılötesi (B&W)":
+            # Askeri 'White Hot' modu
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             img = cv2.applyColorMap(gray, cv2.COLORMAP_BONE)
             img = (img * self.vignette_mask[:, :, np.newaxis]).astype(np.uint8)
 
         elif self.mode == "Ultra Parlak":
-            # Hızlı Histogram Eşitleme (Tüm görüntü yerine gri üzerinden)
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            gray = cv2.equalizeHist(gray)
-            img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+            # Adaptif histogram eşitleme (Görüntü kalitesini bozmadan aydınlatır)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            img_clahe = clahe.apply(gray)
+            img = cv2.cvtColor(img_clahe, cv2.COLOR_GRAY2BGR)
 
         return img
 
 # --- UI ---
-st.title("🪖 Tactical Vision HD")
+st.title("🪖 Tactical Vision HD + Termal")
 
-# Mod seçimi - Butonlar yerine selectbox daha stabil geçiş sağlar
 mode = st.selectbox(
     "Görüş Modu Seçin",
-    ["Normal", "Gece Görüşü (Yeşil)", "Ultra Parlak", "Kızılötesi (Simüle)"]
+    ["Normal", "Gece Görüşü (Yeşil)", "Termal (Gelişmiş)", "Kızılötesi (B&W)", "Ultra Parlak"]
 )
 
-# --- WebRTC Konfigürasyonu (KALİTE AYARI BURADA) ---
 ctx = webrtc_streamer(
-    key="high-def-vision",
-    video_transformer_factory=MilitaryVisionTransformer,
+    key="tactical-vision",
+    video_transformer_factory=TacticalTransformer,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     media_stream_constraints={
         "video": {
-            # Çözünürlüğü HD olarak zorluyoruz
-            "width": {"ideal": 1280, "min": 800},
-            "height": {"ideal": 720, "min": 600},
-            "frameRate": {"ideal": 30}, # Akıcılık için 30 FPS
+            "width": {"ideal": 1920}, # Full HD zorlama
+            "height": {"ideal": 1080},
             "facingMode": "environment"
         },
         "audio": False
     },
-    async_processing=True, # İşlemleri asenkron yaparak UI donmasını engeller
+    async_processing=True,
 )
 
 if ctx.video_transformer:
     ctx.video_transformer.mode = mode
+
+st.sidebar.subheader("Sistem Durumu")
+st.sidebar.write("✅ HD Stream Aktif")
+st.sidebar.write(f"✅ Mod: {mode}")
