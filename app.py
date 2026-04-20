@@ -2,98 +2,92 @@ import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 import cv2
 import numpy as np
+import random
 
-# Sayfa Konfigürasyonu
-st.set_page_config(
-    page_title="Night Vision AI Pro",
-    page_icon="🌙",
-    layout="centered"
-)
+st.set_page_config(page_title="MIL-SPEC Night Vision", layout="wide")
 
-# Arayüz Başlıkları
-st.title("🌙 Gece Görüşü & IR Simülatörü")
-st.markdown("""
-    Bu uygulama, düşük ışık koşullarında görüntüyü iyileştirmek için 
-    **OpenCV** kullanarak gerçek zamanlı görüntü işleme yapar.
-""")
-
-# Yan Menü (Sidebar) Kontrolleri
-st.sidebar.header("⚙️ Görüntü Ayarları")
-mode = st.sidebar.radio(
-    "Görüş Modunu Seçin:",
-    ["Normal", "Gece Görüşü (Yeşil)", "Ultra Parlak", "Kızılötesi (Simüle)"]
-)
-
-st.sidebar.markdown("---")
-st.sidebar.write("**Mod Açıklamaları:**")
-if mode == "Gece Görüşü (Yeşil)":
-    st.sidebar.info("Parlaklığı artırır ve yeşil spektruma odalar.")
-elif mode == "Ultra Parlak":
-    st.sidebar.info("Maksimum pozlama ve kontrast ile siyah-beyaz görüntü sağlar.")
-elif mode == "Kızılötesi (Simüle)":
-    st.sidebar.info("Isı haritası (Thermal) efektini simüle eder.")
-
-# Görüntü İşleme Sınıfı
-class NightVisionTransformer(VideoTransformerBase):
+class MilitaryVisionTransformer(VideoTransformerBase):
     def __init__(self):
         self.mode = "Normal"
 
+    def add_noise(self, image):
+        """Askeri cihazlardaki analog karıncalanma efekti."""
+        noise = np.zeros(image.shape, np.int8)
+        cv2.randn(noise, 0, 20)
+        return cv2.add(image, noise, dtype=cv2.CV_8UC3)
+
+    def apply_vignette(self, image):
+        """Lens kenarlarındaki kararma efekti."""
+        rows, cols = image.shape[:2]
+        kernel_x = cv2.getGaussianKernel(cols, cols/2)
+        kernel_y = cv2.getGaussianKernel(rows, rows/2)
+        kernel = kernel_y * kernel_x.T
+        mask = 255 * kernel / np.linalg.norm(kernel)
+        vignette = np.copy(image)
+        for i in range(3):
+            vignette[:, :, i] = vignette[:, :, i] * mask
+        return vignette
+
     def transform(self, frame):
-        # Görüntüyü kare (frame) olarak al (BGR formatında)
         img = frame.to_ndarray(format="bgr24")
-
+        
         if self.mode == "Gece Görüşü (Yeşil)":
-            # 1. Parlaklık (beta) ve Kontrast (alpha) artırma
-            img = cv2.convertScaleAbs(img, alpha=1.8, beta=40)
-            # 2. Yeşil filtre uygula (Mavi ve Kırmızı kanalları baskıla)
-            img[:, :, 0] = img[:, :, 0] * 0.1  # Mavi
-            img[:, :, 2] = img[:, :, 2] * 0.1  # Kırmızı
-            # 3. Kumlanmayı azaltmak için hafif blur
-            img = cv2.GaussianBlur(img, (3, 3), 0)
-
-        elif self.mode == "Ultra Parlak":
-            # Görüntüyü gri tonlamaya çevir (daha fazla ışık hassasiyeti için)
+            # 1. Parlaklığı artır (Işık yükseltici tüp simülasyonu)
+            img = cv2.convertScaleAbs(img, alpha=1.5, beta=50)
+            # 2. Gri tonlamaya çevir ve yeşil kanala bindir
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            # Kontrastı aşırı artır (CLAHE - Adaptive Histogram Equalization)
-            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-            bright = clahe.apply(gray)
-            # Tekrar renkli formata dönüştür (Streamlit uyumu için)
-            img = cv2.cvtColor(bright, cv2.COLOR_GRAY2BGR)
-            # Parlaklığı ek olarak artır
-            img = cv2.convertScaleAbs(img, alpha=1.2, beta=60)
+            green_img = np.zeros_like(img)
+            green_img[:, :, 1] = gray # Sadece Yeşil kanal
+            # 3. Gerçekçilik efektleri
+            img = self.add_noise(green_img)
+            img = self.apply_vignette(img)
+            # 4. Tarama çizgileri
+            img[::4, :, :] = img[::4, :, :] * 0.9 
 
         elif self.mode == "Kızılötesi (Simüle)":
-            # Görüntüyü griye çevir
+            # Askeri termal kameralar (FLIR) genellikle 'White Hot' veya 'Ironbow' kullanır
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            # Isı haritası uygula (HOT veya JET kullanılabilir)
-            thermal = cv2.applyColorMap(gray, cv2.COLORMAP_HOT)
-            img = thermal
+            # Keskinliği artır (Termal kenar belirginleştirme)
+            gray = cv2.detailEnhance(gray, sigma_s=10, sigma_r=0.15)
+            # Isı haritası uygula (COLORMAP_IRONBOW askeri standartlara yakındır)
+            thermal = cv2.applyColorMap(gray, cv2.COLORMAP_BONE) # Alternatif: COLORMAP_JET
+            img = self.apply_vignette(thermal)
+            # Digital HUD efekti için hafif noise
+            img = self.add_noise(img)
+
+        elif self.mode == "Ultra Parlak":
+            # Siyah beyaz yüksek kontrastlı mod
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            img = cv2.equalizeHist(img)
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            img = cv2.convertScaleAbs(img, alpha=1.2, beta=30)
 
         return img
 
-# WebRTC (Kamera) Bileşeni
-ctx = webrtc_streamer(
-    key="night-vision-app",
-    video_transformer_factory=NightVisionTransformer,
-    # Google STUN sunucuları (Bağlantı kurmayı kolaylaştırır)
-    rtc_configuration={
-        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-    },
-    # Mobil cihazlar için arka kamerayı zorla
-    media_stream_constraints={
-        "video": {
-            "facingMode": "environment",
-            "width": {"ideal": 1280},
-            "height": {"ideal": 720}
-        },
-        "audio": False
-    },
-    async_processing=True,
+# --- UI TASARIMI ---
+st.title("🪖 MIL-SPEC Tactical Vision")
+
+mode = st.select_slider(
+    "Vizör Modu",
+    options=["Normal", "Gece Görüşü (Yeşil)", "Ultra Parlak", "Kızılötesi (Simüle)"]
 )
 
-# Modu sınıfa aktar
+ctx = webrtc_streamer(
+    key="military-vision",
+    video_transformer_factory=MilitaryVisionTransformer,
+    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    media_stream_constraints={
+        "video": {"facingMode": "environment"},
+        "audio": False
+    },
+)
+
 if ctx.video_transformer:
     ctx.video_transformer.mode = mode
 
-st.write("---")
-st.caption("İş bilgisayarından geliştirilmiştir. Telefon tarayıcısından erişim için HTTPS gereklidir.")
+# Teknik Detaylar Paneli
+col1, col2 = st.columns(2)
+with col1:
+    st.info("🛰️ **Sinyal Durumu:** Aktif\n\n🛡️ **Lens:** 35mm Gen3 Simülasyonu")
+with col2:
+    st.success("🔋 **Batarya:** %98\n\n📡 **Bağlantı:** Şifreli (WebRTC)")
