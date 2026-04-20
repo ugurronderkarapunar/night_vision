@@ -2,106 +2,136 @@ import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 import cv2
 import numpy as np
-import time
-import math
+import random
+import requests
 
-st.set_page_config(page_title="OPERATOR HUD Gen-5", layout="wide")
+st.set_page_config(page_title="Tactical Vision HD", layout="wide")
 
-class TacticalHUDTransformer(VideoTransformerBase):
+# -------------------------------
+# Termal ve kızılötesi efektleri
+# -------------------------------
+class ThermalTransformer(VideoTransformerBase):
     def __init__(self):
-        self.mode = "Normal"
-        self.vignette_mask = None
-        self.start_time = time.time()
+        self.mode = "Termal"
+        self.distance = 50.0   # metre
+        self.location = "İstanbul, Beşiktaş"  # varsayılan
+        self.face_detected = False
 
-    def apply_thermal_effects(self, gray):
-        """Gerçekçi termal doku ve keskinlik."""
-        # Isı yayılımını simüle etmek için hafif blur ve ardından keskinleştirme
-        blur = cv2.GaussianBlur(gray, (5, 5), 0)
-        sharp = cv2.addWeighted(gray, 1.5, blur, -0.5, 0)
-        return sharp
+    def apply_thermal(self, img):
+        """Görüntüyü termal (sıcak-soğuk) renklere çevir"""
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # Kontrast artır
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(gray)
+        # Renk haritası (JET = mavi(soğuk) -> kırmızı(sıcak))
+        thermal = cv2.applyColorMap(enhanced, cv2.COLORMAP_JET)
+        return thermal
 
-    def draw_hud(self, frame, mode_name):
-        h, w = frame.shape[:2]
-        cx, cy = w // 2, h // 2
-        color = (0, 255, 0) if "Yeşil" in mode_name else (255, 255, 255)
-        
-        # --- MERKEZ NİŞANGAH ---
-        cv2.line(frame, (cx - 20, cy), (cx + 20, cy), color, 1)
-        cv2.line(frame, (cx, cy - 20), (cx, cy + 20), color, 1)
-        
-        # --- MESAFE ÖLÇER (Stadiametric) ---
-        # Objelerin odağa uzaklığını simüle eden dinamik bir veri
-        dist = 150.5 + math.sin(time.time()) * 5 # Hareketli mesafe simülasyonu
-        cv2.putText(frame, f"RNG: {dist:.1f}m", (cx + 50, cy + 50), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    def apply_ir(self, img):
+        """Kızılötesi benzeri (beyaz-sıcak, siyah-soğuk)"""
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(gray)
+        # Invert edilmiş HOT (beyaz-sıcak)
+        ir = cv2.applyColorMap(enhanced, cv2.COLORMAP_HOT)
+        return ir
 
-        # --- KONUM VE YÖNELİM ---
-        cv2.putText(frame, "POS: 41.0082 N, 28.9784 E", (50, h - 80), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-        cv2.putText(frame, f"AZM: {abs(int(math.degrees(math.sin(time.time()/2))*2)) }' NW", 
-                    (50, h - 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-        
-        # --- SİSTEM DURUMU ---
-        cv2.putText(frame, f"MODE: {mode_name}", (50, 50), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-        
-        # Batarya ve Zaman
-        elapsed = int(time.time() - self.start_time)
-        cv2.putText(frame, f"OP_TIME: {elapsed}s", (w - 200, h - 55), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+    def apply_night_vision(self, img):
+        """Gece görüşü (yeşil tonları)"""
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(gray)
+        night = cv2.merge([np.zeros_like(enhanced), enhanced, np.zeros_like(enhanced)])
+        return night
 
-        return frame
+    def draw_hud(self, img):
+        h, w = img.shape[:2]
+        green = (0, 255, 0)
+        red = (0, 0, 255)
+        # Merkez crosshair
+        cx, cy = w//2, h//2
+        cv2.line(img, (cx-30, cy), (cx-10, cy), green, 2)
+        cv2.line(img, (cx+10, cy), (cx+30, cy), green, 2)
+        cv2.line(img, (cx, cy-30), (cx, cy-10), green, 2)
+        cv2.line(img, (cx, cy+10), (cx, cy+30), green, 2)
+        cv2.circle(img, (cx, cy), 2, green, -1)
+        # Mesafe ve konum
+        cv2.putText(img, f"RNG: {self.distance:.1f} m", (30, h-30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, green, 2)
+        cv2.putText(img, f"LOC: {self.location}", (30, h-60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, green, 1)
+        cv2.putText(img, f"MODE: {self.mode.upper()}", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, green, 2)
+        return img
 
     def transform(self, frame):
         img = frame.to_ndarray(format="bgr24")
-        h, w = img.shape[:2]
+        if self.mode == "Termal":
+            processed = self.apply_thermal(img)
+        elif self.mode == "Kızılötesi":
+            processed = self.apply_ir(img)
+        elif self.mode == "Gece Görüşü":
+            processed = self.apply_night_vision(img)
+        else:
+            processed = img
+        processed = self.draw_hud(processed)
+        return processed
 
-        if self.mode == "Termal (FLIR)":
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            # Yüksek ısı kontrastı (Adaptive)
-            clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(8,8))
-            thermal = clahe.apply(gray)
-            thermal = self.apply_thermal_effects(thermal)
-            # White-Hot görünümü
-            img = cv2.cvtColor(thermal, cv2.COLOR_GRAY2BGR)
-            img = self.draw_hud(img, "THERMAL-IR")
+# -------------------------------
+# Konum alma (IP tabanlı - basit ve çalışır)
+# -------------------------------
+def get_location_by_ip():
+    try:
+        response = requests.get('https://ipinfo.io/json', timeout=5)
+        data = response.json()
+        city = data.get('city', 'Bilinmiyor')
+        region = data.get('region', '')
+        return f"{city}, {region}" if region else city
+    except:
+        return "Konum alınamadı"
 
-        elif self.mode == "Gece Görüşü (G3)":
-            # Yeşil fosfor simülasyonu
-            img = cv2.convertScaleAbs(img, alpha=1.8, beta=30)
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            green = np.zeros_like(img)
-            green[:, :, 1] = gray # Sadece yeşil kanal
-            # Scanlines ve Noise
-            noise = np.random.normal(0, 15, (h, w, 3)).astype(np.uint8)
-            img = cv2.add(green, noise)
-            img = self.draw_hud(img, "NVG-GEN3")
+# -------------------------------
+# Streamlit UI
+# -------------------------------
+st.title("🪖 Tactical Vision HD - Gerçek Zamanlı Termal & Kızılötesi")
 
-        elif self.mode == "Kızılötesi (Digital)":
-            # Düşük ışıkta dijital sensör artırımı
-            img = cv2.detailEnhance(img, sigma_s=10, sigma_r=0.15)
-            img = cv2.convertScaleAbs(img, alpha=1.2, beta=50)
-            img = self.draw_hud(img, "DIGITAL-IR")
+# Sidebar
+with st.sidebar:
+    st.header("Ayarlar")
+    mode = st.selectbox("Görüş Modu", ["Termal", "Kızılötesi", "Gece Görüşü", "Normal"])
+    
+    st.subheader("Mesafe (Lazer Telemetre)")
+    distance = st.slider("Mesafe (metre)", min_value=0.0, max_value=2000.0, value=245.0, step=5.0)
+    
+    st.subheader("Konum Bilgisi")
+    location_option = st.radio("Konum kaynağı", ["Otomatik (IP)", "Manuel"])
+    if location_option == "Manuel":
+        city = st.text_input("Şehir", "İstanbul")
+        district = st.text_input("İlçe", "Beşiktaş")
+        location = f"{city}, {district}"
+    else:
+        location = get_location_by_ip()
+        st.info(f"Tespit edilen konum: {location}")
+    
+    st.divider()
+    st.caption("Not: Termal ve kızılötesi efektleri görüntü parlaklığına göre renklendirme yapar. Mesafe manuel olarak ayarlanabilir.")
 
-        return img
-
-# --- UI ---
-st.title("🪖 Advanced Operator Visor")
-
-mode = st.radio("Sistem Seçimi", 
-               ["Normal", "Termal (FLIR)", "Gece Görüşü (G3)", "Kızılötesi (Digital)"],
-               horizontal=True)
-
-webrtc_streamer(
-    key="operator-v5",
-    video_transformer_factory=TacticalHUDTransformer,
+# Video stream
+ctx = webrtc_streamer(
+    key="thermal-cam",
+    video_transformer_factory=ThermalTransformer,
+    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     media_stream_constraints={
-        "video": {"width": 1280, "height": 720, "facingMode": "environment"},
+        "video": {
+            "width": {"ideal": 1920},
+            "height": {"ideal": 1080},
+            "facingMode": "environment"
+        },
         "audio": False
     },
     async_processing=True,
 )
 
-if ctx := st.session_state.get("operator-v5"):
-    if ctx.video_transformer:
-        ctx.video_transformer.mode = mode
+if ctx.video_transformer:
+    ctx.video_transformer.mode = mode
+    ctx.video_transformer.distance = distance
+    ctx.video_transformer.location = location
+
+st.caption("💡 İpucu: Termal modda sıcak nesneler (yüz, ampul) kırmızı/turuncu, soğuk nesneler mavi görünür. Kızılötesi modda ise beyaz-sıcak, siyah-soğuk simüle edilir.")
