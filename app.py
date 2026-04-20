@@ -112,7 +112,7 @@ ctx = webrtc_streamer(
     video_transformer_factory=lambda: TacticalTransformer(mode_callback=get_current_mode),
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     media_stream_constraints={
-        "video": {"width": {"ideal": 640}, "height": {"ideal": 480}, "facingMode": "environment"},
+        "video": {"width": {"ideal": 320}, "height": {"ideal": 240}, "facingMode": "environment"},
         "audio": False
     },
     async_processing=True,
